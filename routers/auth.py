@@ -28,6 +28,7 @@ WEB_PORTAL_URL = os.getenv("WEB_PORTAL_URL")
 
 
 @router.get("/github")
+@limiter.limit("10/minute")
 async def github_login(request: Request):
     state = request.query_params.get("state")
     code_verifier = request.query_params.get("code_verifier")
@@ -67,6 +68,7 @@ async def github_login(request: Request):
 
 
 @router.get("/github/callback")
+@limiter.limit("10/minute")
 async def github_callback(request: Request, response: Response):
     code = request.query_params.get("code")
     state = request.query_params.get("state")
@@ -222,7 +224,10 @@ class RefreshRequest(BaseModel):
 
 
 @router.get("/me")
-async def read_users_me(current_user: dict = Depends(get_current_user)):
+@limiter.limit("10/minute")
+async def read_users_me(
+    request: Request,
+    current_user: dict = Depends(get_current_user)):
     return {
         "status": "success",
         "data": {
@@ -235,7 +240,10 @@ async def read_users_me(current_user: dict = Depends(get_current_user)):
 
 
 @router.post("/refresh")
-async def refresh_token(body: RefreshRequest):
+@limiter.limit("10/minute")
+async def refresh_token(
+    request: Request,
+    body: RefreshRequest):
     if not body.refresh_token:
         raise HTTPException(status_code=400, detail={
             "status": "error",
@@ -270,7 +278,10 @@ async def refresh_token(body: RefreshRequest):
 
 
 @router.post("/logout")
-async def logout(response: Response):
+@limiter.limit("10/minute")
+async def logout(
+    request: Request,
+    response: Response):
     response.delete_cookie(
         key="access_token",
         httponly=True,

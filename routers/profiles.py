@@ -8,6 +8,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from utils.supabase import supabase
 from middleware.auth import get_current_user, require_role
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter(prefix="/api", tags=["profiles"])
 
@@ -102,6 +106,7 @@ def build_pagination_links(request: Request, page: int, limit: int, total_pages:
 # ─── GET /api/profiles ────────────────────────────────────────────
 
 @router.get("/profiles")
+@limiter.limit("60/minute")
 async def list_profiles(
     request: Request,
     gender: str = None,
@@ -162,7 +167,9 @@ class CreateProfileRequest(BaseModel):
 
 
 @router.post("/profiles", status_code=201)
+@limiter.limit("60/minute")
 async def create_profile(
+    request: Request,
     body: CreateProfileRequest,
     current_user: dict = Depends(require_role("admin"))
 ):
@@ -257,6 +264,7 @@ async def create_profile(
 # ─── GET /api/profiles/search ─────────────────────────────────────
 
 @router.get("/profiles/search")
+@limiter.limit("60/minute")
 async def search_profiles(
     request: Request,
     q: str = None,
@@ -322,6 +330,7 @@ async def search_profiles(
 # ─── GET /api/profiles/export ─────────────────────────────────────
 
 @router.get("/profiles/export")
+@limiter.limit("60/minute")
 async def export_profiles(  
     request: Request,
     x_api_version: str = Header(..., alias="X-API-Version"),
@@ -381,7 +390,9 @@ async def export_profiles(
 # ─── GET /api/profiles/:id ────────────────────────────────────────
 
 @router.get("/profiles/{profile_id}")
+@limiter.limit("60/minute")
 async def get_profile(
+    request: Request,
     profile_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -402,7 +413,9 @@ async def get_profile(
 # ─── DELETE /api/profiles/:id ─────────────────────────────────────
 
 @router.delete("/profiles/{profile_id}", status_code=204)
+@limiter.limit("60/minute")
 async def delete_profile(
+    request: Request,
     profile_id: str,
     current_user: dict = Depends(require_role("admin"))
 ):
@@ -421,7 +434,10 @@ async def delete_profile(
 # ─── GET /api/me ──────────────────────────────────────────────────
 
 @router.get("/me")
-async def get_me(current_user: dict = Depends(get_current_user)):
+@limiter.limit("60/minute")
+async def get_me(
+    request: Request,
+    current_user: dict = Depends(get_current_user)):
     return {
         "status": "success",
         "data": {
