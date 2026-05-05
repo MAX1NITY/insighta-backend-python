@@ -9,3 +9,5 @@ python-multipart==0.0.9
 starlette==0.37.2
 pycountry==23.12.11
 upstash-redis==1.1.0
+python-multipart==0.0.9
+aiofiles==23.2.1

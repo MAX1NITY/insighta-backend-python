@@ -1,9 +1,12 @@
 import os
 import csv
 import httpx
+import io
+import asyncio
+import aiofiles
 from io import StringIO
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Request, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, Header, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from utils.supabase import supabase
@@ -465,6 +468,172 @@ async def get_profile(
         "status": "success",
         "data": result.data
     }
+
+
+# ─── POST /api/profiles/upload ────────────────────────────────────
+
+VALID_GENDERS = {"male", "female", "unknown"}
+REQUIRED_FIELDS = {"name", "gender", "age", "country_id"}
+CHUNK_SIZE = 1000  # Process 1000 rows at a time
+
+@router.post("/profiles/upload")
+async def upload_profiles_csv(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_role("admin"))
+):
+    # Validate file type
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail={
+            "status": "error",
+            "message": "Only CSV files are accepted"
+        })
+
+    total_rows = 0
+    inserted = 0
+    skipped = 0
+    reasons = {
+        "duplicate_name": 0,
+        "invalid_age": 0,
+        "missing_fields": 0,
+        "invalid_gender": 0,
+        "malformed_row": 0
+    }
+
+    try:
+        # Read file content — stream it not load all at once
+        content = await file.read()
+        text = content.decode("utf-8", errors="replace")
+        reader = csv.DictReader(io.StringIO(text))
+
+        # Fetch existing names for duplicate checking
+        existing_result = supabase.from_("profiles") \
+            .select("name") \
+            .execute()
+        existing_names = {
+            row["name"].lower()
+            for row in (existing_result.data or [])
+        }
+
+        batch = []
+
+        for row in reader:
+            total_rows += 1
+
+            try:
+                # 1. Check column count / malformed row
+                if len(row) < len(REQUIRED_FIELDS):
+                    skipped += 1
+                    reasons["malformed_row"] += 1
+                    continue
+
+                # 2. Check required fields
+                missing = [
+                    f for f in REQUIRED_FIELDS
+                    if not row.get(f) or str(row.get(f)).strip() == ""
+                ]
+                if missing:
+                    skipped += 1
+                    reasons["missing_fields"] += 1
+                    continue
+
+                name = str(row["name"]).strip()
+                gender = str(row["gender"]).strip().lower()
+                country_id = str(row["country_id"]).strip().upper()
+
+                # 3. Validate age
+                try:
+                    age = int(row["age"])
+                    if age < 0 or age > 150:
+                        raise ValueError
+                except (ValueError, TypeError):
+                    skipped += 1
+                    reasons["invalid_age"] += 1
+                    continue
+
+                # 4. Validate gender
+                if gender not in VALID_GENDERS:
+                    skipped += 1
+                    reasons["invalid_gender"] += 1
+                    continue
+
+                # 5. Check for duplicate name
+                if name.lower() in existing_names:
+                    skipped += 1
+                    reasons["duplicate_name"] += 1
+                    continue
+
+                # 6. Build profile row
+                import pycountry
+                try:
+                    country = pycountry.countries.get(alpha_2=country_id)
+                    country_name = country.name if country else "Unknown"
+                except Exception:
+                    country_name = "Unknown"
+
+                profile = {
+                    "id": str(__import__("uuid").uuid4()),
+                    "name": name,
+                    "gender": gender,
+                    "gender_probability": float(
+                        row.get("gender_probability", 0) or 0
+                    ),
+                    "age": age,
+                    "age_group": get_age_group(age),
+                    "country_id": country_id,
+                    "country_name": country_name,
+                    "country_probability": float(
+                        row.get("country_probability", 0) or 0
+                    ),
+                    "created_at": datetime.now(timezone.utc).isoformat()
+                }
+
+                # Track name to prevent duplicates within the file itself
+                existing_names.add(name.lower())
+                batch.append(profile)
+
+                # 7. Insert in chunks of 1000
+                if len(batch) >= CHUNK_SIZE:
+                    result = supabase.from_("profiles") \
+                        .insert(batch) \
+                        .execute()
+                    if result.data:
+                        inserted += len(result.data)
+                    batch = []
+
+            except Exception:
+                # Single bad row never fails entire upload
+                skipped += 1
+                reasons["malformed_row"] += 1
+                continue
+
+        # Insert remaining rows
+        if batch:
+            result = supabase.from_("profiles") \
+                .insert(batch) \
+                .execute()
+            if result.data:
+                inserted += len(result.data)
+
+        # Invalidate cache after bulk insert
+        flush_profiles_cache()
+
+        # Clean up zero reasons
+        reasons = {k: v for k, v in reasons.items() if v > 0}
+
+        return {
+            "status": "success",
+            "total_rows": total_rows,
+            "inserted": inserted,
+            "skipped": skipped,
+            "reasons": reasons
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={
+            "status": "error",
+            "message": f"Upload failed: {str(e)}"
+        })
 
 
 # ─── DELETE /api/profiles/:id ─────────────────────────────────────
