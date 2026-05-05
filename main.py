@@ -1,7 +1,7 @@
 import os
 import time
 import logging
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -10,6 +10,8 @@ from slowapi.errors import RateLimitExceeded
 from dotenv import load_dotenv
 from middleware.version_check import VersionCheckMiddleware
 from routers import auth, profiles
+from fastapi.openapi.models import APIKey
+from fastapi.security import APIKeyHeader
 
 load_dotenv()
 
@@ -20,7 +22,10 @@ logger = logging.getLogger(__name__)
 # Rate limiter
 limiter = Limiter(key_func=get_remote_address)
 
-app = FastAPI(title="Insighta Labs+ API")
+version_header = APIKeyHeader(name="X-API-Version", auto_error=False)
+
+app = FastAPI(title="Insighta Labs+ API",
+              openapi_tags=[{"name": "profiles"}, {"name": "auth"}])
 
 # Rate limiter
 app.state.limiter = limiter
