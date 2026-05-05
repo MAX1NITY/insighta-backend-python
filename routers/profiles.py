@@ -10,6 +10,8 @@ from utils.supabase import supabase
 from middleware.auth import get_current_user, require_role
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from utils.cache import get_cache, set_cache, flush_profiles_cache
+from utils.normalize import normalize_filters, normalize_search_query, make_cache_key
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -131,19 +133,46 @@ async def list_profiles(
     page = max(1, page)
     offset = (page - 1) * limit
 
+    normalized = normalize_filters(
+        gender=gender,
+        country_id=country_id,
+        age_group=age_group,
+        min_age=min_age,
+        max_age=max_age,
+        sort_by=sort_by,
+        order=order,
+        page=page,
+        limit=limit
+    )
+
+    cache_key = make_cache_key("profiles", normalized)
+
+    cached = get_cache(cache_key)
+    if cached:
+        return cached
+
+    offset = (page - 1) * limit
+
     try:
         query = supabase.from_("profiles").select("*", count="exact")
-        query = build_profile_query(query, gender, country_id, age_group, min_age, max_age)
+        query = build_profile_query(
+            query, 
+            normalized["gender"],
+            normalized["country_id"],
+            normalized["age_group"],
+            normalized["min_age"],
+            normalized["max_age"]
+            )
 
-        ascending = order == "asc"
-        result = query.order(sort_by, desc=not ascending).range(offset, offset + limit - 1).execute()
+        ascending = normalized["order"] == "asc"
+        result = query.order(normalized["sort_by"], desc=not ascending).range(offset, offset + limit - 1).execute()
 
         total = result.count or 0
         total_pages = -(-total // limit)  # ceiling division
 
         links = build_pagination_links(request, page, limit, total_pages)
 
-        return {
+        response_data = {
             "status": "success",
             "page": page,
             "limit": limit,
@@ -152,6 +181,10 @@ async def list_profiles(
             "links": links,
             "data": result.data or []
         }
+    
+        set_cache(cache_key, response_data, ttl=300)
+
+        return response_data
 
     except Exception as e:
         raise HTTPException(status_code=500, detail={
@@ -254,6 +287,8 @@ async def create_profile(
             "status": "error",
             "message": "Server failure"
         })
+    
+    flush_profiles_cache()
 
     return {
         "status": "success",
@@ -282,9 +317,27 @@ async def search_profiles(
 
     limit = max(1, min(50, limit))
     page = max(1, page)
-    offset = (page - 1) * limit
+    
 
     filters = extract_filters(q)
+    normalized = normalize_filters(
+        gender=filters.get("gender"),
+        country_id=filters.get("country_id"),
+        age_group=filters.get("age_group"),
+        min_age=filters.get("min_age"),
+        max_age=filters.get("max_age"),
+        sort_by=sort_by,
+        order=order,
+        page=page,
+        limit=limit
+    )
+
+    cache_key = make_cache_key("search", normalized)
+    cached = get_cache(cache_key)
+    if cached:
+        return cached
+    
+    offset = (page - 1) * limit
     ascending = order == "asc"
 
     try:
@@ -293,16 +346,16 @@ async def search_profiles(
         if filters:
             query = build_profile_query(
                 query,
-                gender=filters.get("gender"),
-                country_id=filters.get("country_id"),
-                age_group=filters.get("age_group"),
-                min_age=filters.get("min_age"),
-                max_age=filters.get("max_age")
+                gender=normalized["gender"],
+                country_id=normalized["country_id"],
+                age_group=normalized["age_group"],
+                min_age=normalized["min_age"],
+                max_age=normalized["max_age"]
             )
         else:
             query = query.ilike("name", f"%{q}%")
 
-        result = query.order(sort_by, desc=not ascending).range(offset, offset + limit - 1).execute()
+        result = query.order(normalized["sort_by"], desc=not ascending).range(offset, offset + limit - 1).execute()
 
         total = result.count or 0
         total_pages = -(-total // limit)
@@ -310,7 +363,7 @@ async def search_profiles(
         extra = f"&q={q}"
         links = build_pagination_links(request, page, limit, total_pages, extra)
 
-        return {
+        response_data = {
             "status": "success",
             "page": page,
             "limit": limit,
@@ -319,6 +372,10 @@ async def search_profiles(
             "links": links,
             "data": result.data or []
         }
+    
+        set_cache(cache_key, response_data, ttl=300)
+
+        return response_data
 
     except Exception as e:
         raise HTTPException(status_code=500, detail={
@@ -428,6 +485,9 @@ async def delete_profile(
         })
 
     supabase.from_("profiles").delete().eq("id", profile_id).execute()
+
+    flush_profiles_cache()
+
     return None
 
 
