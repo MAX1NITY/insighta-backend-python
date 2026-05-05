@@ -14,6 +14,10 @@ from utils.jwt import (
     decode_refresh_token
 )
 from middleware.auth import get_current_user
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
