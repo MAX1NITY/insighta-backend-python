@@ -32,7 +32,8 @@ app.add_middleware(
     allow_origins=[os.getenv("WEB_PORTAL_URL", "")],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*", "X-API-Version"],
+    expose_headers=["*"]
 )
 
 # Version check

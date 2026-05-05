@@ -189,7 +189,10 @@ async def github_callback(request: Request, response: Response):
         )
 
     # Web — set HttpOnly cookies
-    web_response = RedirectResponse(url=f"{WEB_PORTAL_URL}/dashboard")
+    web_response = RedirectResponse(
+    url=f"{WEB_PORTAL_URL}/dashboard",
+    status_code=302
+)
     web_response.set_cookie(
         key="access_token",
         value=access_token,
